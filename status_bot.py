@@ -128,7 +128,7 @@ def add_gpu_fields(embed, gpus):
             value=(
                 f"연산: {gpu_bar} **{g['util']}%**\n"
                 f"메모리: {mem_bar} **{g['mem_used']} / {g['mem_total']} MiB**\n"
-                f"온도: **{g['temp']}C**"
+                f"온도: **{g['temp']}°C**"
             ),
             inline=False
         )
