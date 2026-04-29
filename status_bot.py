@@ -19,7 +19,7 @@ if not CHANNEL_ID:
 
 CHANNEL_ID = int(CHANNEL_ID)
 
-GPU_THRESHOLD = 30
+GPU_THRESHOLD = 1500  # MiB
 CHECK_INTERVAL = 30
 
 EXPERIMENT_PROCESSES = [
@@ -68,21 +68,35 @@ def get_gpu_info():
 
 def get_experiment_processes():
     found = {}
-    for proc in psutil.process_iter(["pid", "name", "cmdline", "username"]):
-        try:
-            name = proc.info["name"] or ""
-            cmdline = " ".join(proc.info["cmdline"] or [])
-            user = proc.info.get("username", "unknown")
-
-            for keyword in EXPERIMENT_PROCESSES:
-                if keyword.lower() in name.lower() or keyword.lower() in cmdline.lower():
-                    found[proc.info["pid"]] = {
-                        "user": user,
-                        "name": name
-                    }
-                    break
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,used_memory", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().split("\n")
+        for line in lines:
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) == 3:
+                gpu_uuid, pid_str, used_memory_str = parts
+                try:
+                    pid = int(pid_str)
+                    used_memory = int(used_memory_str)
+                    if used_memory >= GPU_THRESHOLD:
+                        try:
+                            proc = psutil.Process(pid)
+                            user = proc.username()
+                            name = proc.name()
+                            found[pid] = {
+                                "user": user,
+                                "name": name,
+                                "gpu_memory": used_memory
+                            }
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except ValueError:
+                    pass
+    except Exception as e:
+        print(f"[get_experiment_processes error] {e}")
     return found
 
 
@@ -91,7 +105,7 @@ def get_uptime():
     d = uptime_seconds // 86400
     h = (uptime_seconds % 86400) // 3600
     m = (uptime_seconds % 3600) // 60
-    return f"{d}일 {h}시간 {m}분"
+    return f"{d}d {h}h {m}m"
 
 
 def make_bar(percent, length=10):
@@ -129,7 +143,7 @@ def make_status_embed():
 
     embed.add_field(name="Uptime", value=get_uptime(), inline=False)
 
-    cpu_percent = psutil.cpu_percent(interval=1)
+    cpu_percent = psutil.cpu_percent(interval=0.1)
     cpu_cores = psutil.cpu_count()
     cpu_bar = make_bar(cpu_percent)
     embed.add_field(
@@ -157,7 +171,7 @@ def make_status_embed():
 
         secs = int(time.time() - info["start_time"])
         h, m = divmod(secs // 60, 60)
-        lines.append(f"`PID {pid}` {info['name']} ({info['user']}, {h}시간 {m}분째)")
+        lines.append(f"`PID {pid}` {info['name']} ({info['user']}, {h}h {m}m)")
 
     embed.add_field(
         name="Experiment",
@@ -186,15 +200,17 @@ async def experiment_monitor():
                 experiment_state["processes"][pid] = {
                     "user": current_procs[pid]["user"],
                     "name": current_procs[pid]["name"],
+                    "gpu_memory": current_procs[pid]["gpu_memory"],
                     "start_time": time.time()
                 }
 
                 embed = discord.Embed(
-                    title="🟡 실험이 시작됨",
+                    title="🚀 Experiment Started",
                     color=0xffff52,
                     timestamp=discord.utils.utcnow()
                 )
                 embed.add_field(
+                    name="Info",
                     value=(
                         f"User: {current_procs[pid]['user']}\n"
                         f"PID: {pid}\n"
@@ -216,7 +232,7 @@ async def experiment_monitor():
                 h, m = divmod(duration // 60, 60)
 
                 embed = discord.Embed(
-                    title="🟡 실험이 종료됨",
+                    title="✅ Experiment End",
                     color=0xff0000,
                     timestamp=discord.utils.utcnow()
                 )
@@ -231,7 +247,7 @@ async def experiment_monitor():
                 )
                 embed.add_field(
                     name="Duration",
-                    value=f"{h}시간 {m}분 동안 진행됨",
+                    value=f"{h}h {m}m",
                     inline=False
                 )
                 embed.set_footer(text="CPSS Lab Server")
@@ -245,9 +261,8 @@ async def experiment_monitor():
 
 @tree.command(name="status", description="Check server status")
 async def status(interaction: discord.Interaction):
-    await interaction.response.defer()
     embed = make_status_embed()
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
 
 @client.event
