@@ -136,7 +136,7 @@ def add_gpu_fields(embed, gpus):
 
 def make_status_embed():
     embed = discord.Embed(
-        title="Monitoring Server Status",
+        title="👁️‍🗨️ Monitoring Server Status",
         color=0x00ff99,
         timestamp=discord.utils.utcnow()
     )
